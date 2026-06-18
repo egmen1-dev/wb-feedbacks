@@ -1328,7 +1328,7 @@ export default function FeedbacksPanel({ token }) {
               {serverCronBlocksClient
                 ? 'Серверный cron отвечает без вкладки (~1 отзыв каждые 6 мин). Клиентский автоответчик отключён.'
                 : serverCronEnvReady && cronStatus.stale
-                  ? 'Сервер настроен, но cron не запускается — включите клиентский автоответчик или Vercel Pro.'
+                  ? 'cron не работает (Hobby?) — включите браузерный автоответчик переключателем «Вкл».'
                   : 'Пока вкладка открыта: черновик YandexGPT → валидация → ответ в WB. Не более '}
               {!serverCronBlocksClient && !(serverCronEnvReady && cronStatus.stale) ? (
                 <>
@@ -1383,14 +1383,14 @@ export default function FeedbacksPanel({ token }) {
             className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
             role="alert"
           >
-            <p className="font-medium">Серверный cron не запускается</p>
+            <p className="font-medium">cron не работает (Hobby?) — включите браузерный автоответчик</p>
             <p className="mt-1">
               {cronStatus.message ||
-                'Cron не отвечал >25 мин. На Vercel Hobby расписание */6 недоступно — нужен Pro или клиентский автоответчик.'}
+                'Cron не отвечал >25 мин. На Vercel Hobby расписание */6 недоступно — включите «Вкл» или перейдите на Pro.'}
             </p>
             {cronStatus.hobbyLimitHint ? (
               <p className="mt-1">
-                Включите переключатель «Вкл» — ответы пойдут из браузера (~{AUTO_REPLY_MAX_PER_HOUR}/час).
+                Переключатель «Вкл» доступен — ответы пойдут из браузера (~{AUTO_REPLY_MAX_PER_HOUR}/час).
               </p>
             ) : null}
           </div>
