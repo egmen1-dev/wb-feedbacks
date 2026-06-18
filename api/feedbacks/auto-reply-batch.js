@@ -5,15 +5,19 @@ import {
 } from '../../lib/wb-feedbacks.js';
 import feedbackDraftHandler from './feedback-draft.js';
 import { isDraftSafeForAutoSend } from '../../lib/feedback-auto-reply.js';
+import { readBearerToken, readCronSecret, isVercelCronRequest } from '../../lib/cron-auth.js';
 
 const TAKE = 20;
 
 function readToken(req) {
-  const cronSecret = process.env.CRON_SECRET?.trim();
-  const header = req.headers?.authorization || req.headers?.Authorization || '';
-  const fromHeader = String(header).replace(/^Bearer\s+/i, '').trim();
+  const cronSecret = readCronSecret();
+  const fromHeader = readBearerToken(req);
 
   if (cronSecret && fromHeader === cronSecret) {
+    return process.env.WB_API_TOKEN?.trim() || null;
+  }
+
+  if (cronSecret && isVercelCronRequest(req)) {
     return process.env.WB_API_TOKEN?.trim() || null;
   }
 

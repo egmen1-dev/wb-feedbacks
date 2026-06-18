@@ -7,20 +7,38 @@ function envPresent(name) {
 
 export function getAiConfigStatus() {
   const serverCronEnabled = envPresent('WB_API_TOKEN');
+  const cronSecretConfigured = envPresent('CRON_SECRET');
+  const yandexConfigured = Boolean(readYandexConfig());
+  const openaiConfigured = envPresent('OPENAI_API_KEY');
+  const aiReady = yandexConfigured || openaiConfigured;
+
+  let serverCronHint = 'Серверный cron выключен — задайте WB_API_TOKEN в Vercel';
+  if (serverCronEnabled && !aiReady) {
+    serverCronHint =
+      'WB_API_TOKEN задан, но нет YandexGPT/OpenAI — cron не сможет сгенерировать черновики';
+  } else if (serverCronEnabled && !cronSecretConfigured) {
+    serverCronHint =
+      'Серверный cron: каждые 6 мин. CRON_SECRET не задан — /api/cron/auto-reply открыт (рекомендуется секрет)';
+  } else if (serverCronEnabled) {
+    serverCronHint =
+      'Серверный cron: каждые 6 мин (CRON_SECRET + WB_API_TOKEN). После смены env — Redeploy production.';
+  }
+
   return {
-    yandexConfigured: Boolean(readYandexConfig()),
-    openaiConfigured: envPresent('OPENAI_API_KEY'),
+    yandexConfigured,
+    openaiConfigured,
     serverCronEnabled,
-    serverCronHint: serverCronEnabled
-      ? 'Серверный cron: каждые 6 мин (без открытой вкладки)'
-      : 'Серверный cron выключен — задайте WB_API_TOKEN в Vercel',
+    cronSecretConfigured,
+    serverCronReady: serverCronEnabled && aiReady,
+    serverCronHint,
     envPresent: {
       YANDEX_GPT_API_KEY: envPresent('YANDEX_GPT_API_KEY'),
       YANDEX_CLOUD_API_KEY: envPresent('YANDEX_CLOUD_API_KEY'),
       YANDEX_FOLDER_ID: envPresent('YANDEX_FOLDER_ID'),
       YANDEX_GPT_MODEL: envPresent('YANDEX_GPT_MODEL'),
-      OPENAI_API_KEY: envPresent('OPENAI_API_KEY'),
+      OPENAI_API_KEY: openaiConfigured,
       WB_API_TOKEN: serverCronEnabled,
+      CRON_SECRET: cronSecretConfigured,
     },
     ...getDeployMeta(),
   };

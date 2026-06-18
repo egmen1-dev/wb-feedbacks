@@ -318,6 +318,8 @@ async function fetchAiConfigStatus() {
           yandexConfigured: Boolean(payload?.yandexConfigured),
           openaiConfigured: Boolean(payload?.openaiConfigured),
           serverCronEnabled: Boolean(payload?.serverCronEnabled),
+          serverCronReady: Boolean(payload?.serverCronReady),
+          cronSecretConfigured: Boolean(payload?.cronSecretConfigured),
           serverCronHint: payload?.serverCronHint || '',
           envPresent: payload?.envPresent || null,
           promptVersion: payload?.promptVersion || null,
@@ -1289,6 +1291,14 @@ export default function FeedbacksPanel({ token }) {
                   {aiConfig.serverCronHint ||
                     'WB_API_TOKEN не задан в Vercel — ответы уходят только пока эта вкладка открыта и переключатель «Вкл».'}
                 </p>
+              </div>
+            ) : aiConfig.serverCronEnabled && !aiConfig.serverCronReady && !aiConfig.loading ? (
+              <div
+                className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+                role="status"
+              >
+                <p className="font-medium">Серверный cron не готов</p>
+                <p className="mt-1">{aiConfig.serverCronHint}</p>
               </div>
             ) : null}
             {autoReplyState.phase === 'error' || autoReplyState.lastResult?.ok === false ? (
