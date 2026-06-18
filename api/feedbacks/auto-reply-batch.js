@@ -6,6 +6,7 @@ import {
 import feedbackDraftHandler from './feedback-draft.js';
 import { isDraftSafeForAutoSend } from '../../lib/feedback-auto-reply.js';
 import { readBearerToken, readCronSecret, isVercelCronRequest } from '../../lib/cron-auth.js';
+import { sendCronJson } from '../../lib/cron-response.js';
 
 const TAKE = 20;
 /** Extra pause between batch steps (on top of wb-feedbacks throttle). */
@@ -56,7 +57,17 @@ function callDraftHandler(feedback, token, { regenerate = false } = {}) {
   });
 }
 
-export default async function handler(req, res) {
+export default async function handler(req, res, options = {}) {
+  const logSource = options.source || (isVercelCronRequest(req) ? 'cron' : 'batch');
+  const logMeta = { source: logSource, authMode: options.authMode || null };
+
+  async function respond(statusCode, data) {
+    if (logSource === 'cron' || isVercelCronRequest(req)) {
+      return sendCronJson(res, statusCode, { ...data, authMode: data.authMode ?? logMeta.authMode }, logMeta);
+    }
+    return res.status(statusCode).json(data);
+  }
+
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -69,7 +80,9 @@ export default async function handler(req, res) {
 
   const token = readToken(req);
   if (!token) {
-    return res.status(503).json({
+    return respond(503, {
+      ok: false,
+      action: 'skipped',
       error: 'WB_API_TOKEN не задан',
       hint: 'Для серверного автоответчика задайте WB_API_TOKEN в Vercel или используйте клиентский режим (вкладка открыта).',
     });
@@ -79,7 +92,7 @@ export default async function handler(req, res) {
     const { feedbacks } = await fetchUnansweredFeedbacks(token, { take: TAKE, skip: 0 });
     const feedback = (feedbacks || []).find((fb) => fb?.id);
     if (!feedback) {
-      return res.status(200).json({ ok: true, action: 'idle', message: 'Нет неотвеченных отзывов' });
+      return respond(200, { ok: true, action: 'idle', message: 'Нет неотвеченных отзывов' });
     }
 
     await sleep(BATCH_STEP_DELAY_MS);
@@ -96,7 +109,7 @@ export default async function handler(req, res) {
     }
 
     if (draftResult.status !== 200) {
-      return res.status(draftResult.status).json({
+      return respond(draftResult.status, {
         ok: false,
         action: 'draft-failed',
         feedbackId: feedback.id,
@@ -106,7 +119,7 @@ export default async function handler(req, res) {
     }
 
     if (!check.ok) {
-      return res.status(200).json({
+      return respond(200, {
         ok: false,
         action: 'skipped',
         feedbackId: feedback.id,
@@ -119,7 +132,7 @@ export default async function handler(req, res) {
     await sleep(BATCH_STEP_DELAY_MS);
     const answer = await postFeedbackAnswer(token, feedback.id, text, { skipVerify: true });
 
-    return res.status(200).json({
+    return respond(200, {
       ok: true,
       action: 'sent',
       feedbackId: feedback.id,
@@ -133,14 +146,15 @@ export default async function handler(req, res) {
     if (error instanceof WbFeedbacksRateLimitError) {
       const retryAfterSec = error.retryAfterSec || 5;
       res.setHeader('Retry-After', String(retryAfterSec));
-      return res.status(429).json({
+      return respond(429, {
         ok: false,
+        action: 'rate-limit',
         code: 'RATE_LIMIT',
         retryAfterSec,
         error: error.message,
       });
     }
     console.error('[feedbacks/auto-reply-batch]', error);
-    return res.status(500).json({ ok: false, error: error.message || 'Ошибка автоответа' });
+    return respond(500, { ok: false, action: 'error', error: error.message || 'Ошибка автоответа' });
   }
 }
