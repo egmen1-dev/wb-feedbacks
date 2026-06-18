@@ -300,6 +300,61 @@ function formatApiCheckDiagnostic({ apiCheckStatus, endpoint, error }) {
   return 'API ai-config-check: 404 / недоступен';
 }
 
+const CRON_ACTION_LABELS = {
+  sent: 'отправлен',
+  idle: 'нет отзывов',
+  skipped: 'пропуск',
+  'auth-failed': '401 auth',
+  'draft-failed': 'ошибка черновика',
+  'rate-limit': 'лимит WB',
+  error: 'ошибка',
+};
+
+function formatCronAction(action) {
+  return CRON_ACTION_LABELS[action] || action || '—';
+}
+
+async function fetchCronStatus() {
+  try {
+    const response = await fetchWithTimeout('/api/feedbacks/cron-status', { method: 'GET' });
+    const { data: payload } = await readJsonResponse(response);
+    if (!response.ok || !payload?.ok) {
+      return {
+        loading: false,
+        runs: [],
+        lastRun: null,
+        recentlyActive: false,
+        stale: true,
+        status: 'unknown',
+        message: payload?.error || 'Не удалось загрузить статус cron',
+        schedule: '*/6 * * * *',
+      };
+    }
+    return {
+      loading: false,
+      runs: payload.runs || [],
+      lastRun: payload.lastRun || null,
+      recentlyActive: Boolean(payload.recentlyActive),
+      stale: Boolean(payload.stale),
+      status: payload.status || 'unknown',
+      message: payload.message || '',
+      schedule: payload.schedule || '*/6 * * * *',
+      hobbyLimitHint: Boolean(payload.hobbyLimitHint),
+    };
+  } catch (err) {
+    return {
+      loading: false,
+      runs: [],
+      lastRun: null,
+      recentlyActive: false,
+      stale: true,
+      status: 'error',
+      message: err?.message || 'Ошибка загрузки cron-status',
+      schedule: '*/6 * * * *',
+    };
+  }
+}
+
 async function fetchAiConfigStatus() {
   const endpoints = [
     { path: '/api/feedbacks/feedbacks-check', label: 'feedbacks-check' },
@@ -518,8 +573,21 @@ export default function FeedbacksPanel({ token }) {
   });
   const [cacheBadge, setCacheBadge] = useState('');
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(() => loadAutoReplyEnabled());
-  const serverCronBlocksClient =
+  const [cronStatus, setCronStatus] = useState({
+    loading: true,
+    runs: [],
+    lastRun: null,
+    recentlyActive: false,
+    stale: true,
+    status: 'unknown',
+    message: '',
+    schedule: '*/6 * * * *',
+    hobbyLimitHint: false,
+  });
+  const serverCronEnvReady =
     aiConfig.serverCronEnabled && aiConfig.serverCronReady && !aiConfig.loading;
+  const serverCronBlocksClient =
+    serverCronEnvReady && cronStatus.recentlyActive && !cronStatus.loading;
   const [autoReplyState, setAutoReplyState] = useState({
     sentThisHour: getSentThisHour(),
     nextInMs: getMsUntilNextSlot(),
@@ -752,6 +820,11 @@ export default function FeedbacksPanel({ token }) {
       );
   }, []);
 
+  const refreshCronStatus = useCallback(() => {
+    setCronStatus((prev) => ({ ...prev, loading: prev.runs.length === 0 }));
+    fetchCronStatus().then((result) => setCronStatus(result));
+  }, []);
+
   const handleRefresh = useCallback(() => {
     if (loadInFlightRef.current) {
       cancelForegroundLoad();
@@ -829,7 +902,13 @@ export default function FeedbacksPanel({ token }) {
   }, [token, requestAiConfigCheck]);
 
   useEffect(() => {
-    if (rateLimitCountdown <= 0) {
+    if (!token) return undefined;
+    refreshCronStatus();
+    const timer = setInterval(refreshCronStatus, 60_000);
+    return () => clearInterval(timer);
+  }, [token, refreshCronStatus]);
+
+  useEffect(() => {
       if (pendingRefreshRef.current) {
         pendingRefreshRef.current = false;
         loadFeedbacks({ force: true });
@@ -1248,8 +1327,10 @@ export default function FeedbacksPanel({ token }) {
             <p className="mt-1 text-xs text-slate-600">
               {serverCronBlocksClient
                 ? 'Серверный cron отвечает без вкладки (~1 отзыв каждые 6 мин). Клиентский автоответчик отключён.'
-                : 'Пока вкладка открыта: черновик YandexGPT → валидация → ответ в WB. Не более '}
-              {!serverCronBlocksClient ? (
+                : serverCronEnvReady && cronStatus.stale
+                  ? 'Сервер настроен, но cron не запускается — включите клиентский автоответчик или Vercel Pro.'
+                  : 'Пока вкладка открыта: черновик YandexGPT → валидация → ответ в WB. Не более '}
+              {!serverCronBlocksClient && !(serverCronEnvReady && cronStatus.stale) ? (
                 <>
                   {AUTO_REPLY_MAX_PER_HOUR}/час (~1 каждые 6 мин).
                 </>
@@ -1294,10 +1375,64 @@ export default function FeedbacksPanel({ token }) {
             <p className="font-medium">Серверный cron активен — клиентский отключён</p>
             <p className="mt-1">
               {aiConfig.serverCronHint ||
-                'WB_API_TOKEN задан в Vercel — ответы уходят каждые 6 мин без открытой вкладки. Переключатель «Вкл» держите выключенным.'}
+                'WB_API_TOKEN задан в Vercel — ответы уходят каждые 6 мин без открытой вкладки.'}
             </p>
           </div>
+        ) : serverCronEnvReady && cronStatus.stale ? (
+          <div
+            className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+            role="alert"
+          >
+            <p className="font-medium">Серверный cron не запускается</p>
+            <p className="mt-1">
+              {cronStatus.message ||
+                'Cron не отвечал >25 мин. На Vercel Hobby расписание */6 недоступно — нужен Pro или клиентский автоответчик.'}
+            </p>
+            {cronStatus.hobbyLimitHint ? (
+              <p className="mt-1">
+                Включите переключатель «Вкл» — ответы пойдут из браузера (~{AUTO_REPLY_MAX_PER_HOUR}/час).
+              </p>
+            ) : null}
+          </div>
         ) : null}
+
+        <div
+          className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+            cronStatus.recentlyActive
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+              : cronStatus.stale && serverCronEnvReady
+                ? 'border-amber-200 bg-amber-50 text-amber-900'
+                : 'border-slate-200 bg-slate-50 text-slate-700'
+          }`}
+          role="status"
+        >
+          <p className="font-medium">
+            Последний cron:{' '}
+            {cronStatus.lastRun
+              ? `${formatAutoReplyTime(cronStatus.lastRun.at)} · ${formatCronAction(cronStatus.lastRun.action)}`
+              : cronStatus.loading
+                ? 'загрузка…'
+                : 'нет данных'}
+          </p>
+          {cronStatus.lastRun?.error ? (
+            <p className="mt-1 text-rose-700">{cronStatus.lastRun.error}</p>
+          ) : cronStatus.message && !cronStatus.recentlyActive ? (
+            <p className="mt-1">{cronStatus.message}</p>
+          ) : null}
+          {cronStatus.runs?.length > 1 ? (
+            <details className="mt-2">
+              <summary className="cursor-pointer font-medium">История cron ({cronStatus.runs.length})</summary>
+              <ul className="mt-1 max-h-32 overflow-y-auto">
+                {cronStatus.runs.slice(0, 10).map((run, index) => (
+                  <li key={`${run.at}-${index}`} className="border-b border-slate-200/60 py-1 last:border-0">
+                    {formatAutoReplyTime(run.at)} · {formatCronAction(run.action)}
+                    {run.error ? ` — ${run.error}` : ''}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+        </div>
 
         <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
           <p>

@@ -18,6 +18,9 @@
     "api/feedbacks/version.js": {
       "maxDuration": 10
     },
+    "api/feedbacks/cron-status.js": {
+      "maxDuration": 10
+    },
     "api/feedbacks/auto-reply-batch.js": {
       "maxDuration": 60
     },
