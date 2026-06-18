@@ -518,6 +518,8 @@ export default function FeedbacksPanel({ token }) {
   });
   const [cacheBadge, setCacheBadge] = useState('');
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(() => loadAutoReplyEnabled());
+  const serverCronBlocksClient =
+    aiConfig.serverCronEnabled && aiConfig.serverCronReady && !aiConfig.loading;
   const [autoReplyState, setAutoReplyState] = useState({
     sentThisHour: getSentThisHour(),
     nextInMs: getMsUntilNextSlot(),
@@ -1008,7 +1010,7 @@ export default function FeedbacksPanel({ token }) {
     autoReplyRef.current?.destroy();
     autoReplyRef.current = null;
 
-    if (!token || !autoReplyEnabled) {
+    if (!token || !autoReplyEnabled || serverCronBlocksClient) {
       setAutoReplyState((prev) => ({
         ...prev,
         sentThisHour: getSentThisHour(),
@@ -1016,7 +1018,11 @@ export default function FeedbacksPanel({ token }) {
         log: getAutoReplyLog(),
         running: false,
         phase: 'idle',
-        status: autoReplyEnabled ? '' : 'остановлен',
+        status: serverCronBlocksClient
+          ? 'серверный cron активен — клиентский отключён'
+          : autoReplyEnabled
+            ? ''
+            : 'остановлен',
       }));
       return undefined;
     }
@@ -1025,6 +1031,7 @@ export default function FeedbacksPanel({ token }) {
       token,
       getFeedbacks: () => dataRef.current?.feedbacks || [],
       getCountUnanswered: () => dataRef.current?.countUnanswered ?? 0,
+      isServerCronActive: () => serverCronBlocksClient,
       onState: (state) => setAutoReplyState((prev) => ({ ...prev, ...state })),
       onFeedbacksLoaded: (list) => applyFeedbacksList(list),
       onAfterSend: (feedbackId) => {
@@ -1054,7 +1061,15 @@ export default function FeedbacksPanel({ token }) {
     scheduler.start();
 
     return () => scheduler.destroy();
-  }, [token, autoReplyEnabled, applyFeedbacksList]);
+  }, [token, autoReplyEnabled, serverCronBlocksClient, applyFeedbacksList]);
+
+  useEffect(() => {
+    if (!serverCronBlocksClient || !autoReplyEnabled) return undefined;
+    setAutoReplyEnabled(false);
+    saveAutoReplyEnabled(false);
+    autoReplyRef.current?.stop();
+    return undefined;
+  }, [serverCronBlocksClient, autoReplyEnabled]);
 
   useEffect(() => {
     if (!autoReplyEnabled) return undefined;
@@ -1069,6 +1084,7 @@ export default function FeedbacksPanel({ token }) {
   }, [autoReplyEnabled]);
 
   const toggleAutoReply = useCallback(() => {
+    if (!autoReplyEnabled && serverCronBlocksClient) return;
     const next = !autoReplyEnabled;
     setAutoReplyEnabled(next);
     saveAutoReplyEnabled(next);
@@ -1079,7 +1095,7 @@ export default function FeedbacksPanel({ token }) {
     if (!dataRef.current?.feedbacks?.length && !loadInFlightRef.current) {
       loadFeedbacksRef.current?.({ force: true });
     }
-  }, [autoReplyEnabled]);
+  }, [autoReplyEnabled, serverCronBlocksClient]);
 
   const feedbacks = data?.feedbacks || [];
   const countUnanswered = data?.countUnanswered ?? 0;
@@ -1230,29 +1246,58 @@ export default function FeedbacksPanel({ token }) {
           <div>
             <h2 className="text-sm font-semibold text-slate-800">Автоответчик</h2>
             <p className="mt-1 text-xs text-slate-600">
-              Пока вкладка открыта: черновик YandexGPT → валидация → ответ в WB. Не более{' '}
-              {AUTO_REPLY_MAX_PER_HOUR}/час (~1 каждые 6 мин).
+              {serverCronBlocksClient
+                ? 'Серверный cron отвечает без вкладки (~1 отзыв каждые 6 мин). Клиентский автоответчик отключён.'
+                : 'Пока вкладка открыта: черновик YandexGPT → валидация → ответ в WB. Не более '}
+              {!serverCronBlocksClient ? (
+                <>
+                  {AUTO_REPLY_MAX_PER_HOUR}/час (~1 каждые 6 мин).
+                </>
+              ) : null}
             </p>
           </div>
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
-            <span>{autoReplyEnabled ? 'Вкл' : 'Выкл'}</span>
+          <label
+            className={`flex items-center gap-2 text-sm text-slate-700 ${
+              serverCronBlocksClient ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+            }`}
+            title={
+              serverCronBlocksClient
+                ? 'Серверный cron активен — не включайте клиентский автоответчик'
+                : undefined
+            }
+          >
+            <span>{autoReplyEnabled && !serverCronBlocksClient ? 'Вкл' : 'Выкл'}</span>
             <button
               type="button"
               role="switch"
-              aria-checked={autoReplyEnabled}
+              aria-checked={autoReplyEnabled && !serverCronBlocksClient}
+              disabled={serverCronBlocksClient}
               className={`relative h-7 w-12 rounded-full transition-colors ${
-                autoReplyEnabled ? 'bg-brand-600' : 'bg-slate-300'
-              }`}
+                autoReplyEnabled && !serverCronBlocksClient ? 'bg-brand-600' : 'bg-slate-300'
+              } ${serverCronBlocksClient ? 'pointer-events-none' : ''}`}
               onClick={toggleAutoReply}
             >
               <span
                 className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                  autoReplyEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                  autoReplyEnabled && !serverCronBlocksClient ? 'translate-x-5' : 'translate-x-0.5'
                 }`}
               />
             </button>
           </label>
         </div>
+
+        {serverCronBlocksClient ? (
+          <div
+            className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900"
+            role="status"
+          >
+            <p className="font-medium">Серверный cron активен — клиентский отключён</p>
+            <p className="mt-1">
+              {aiConfig.serverCronHint ||
+                'WB_API_TOKEN задан в Vercel — ответы уходят каждые 6 мин без открытой вкладки. Переключатель «Вкл» держите выключенным.'}
+            </p>
+          </div>
+        ) : null}
 
         <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
           <p>
@@ -1265,7 +1310,7 @@ export default function FeedbacksPanel({ token }) {
           </p>
           <p>
             <span className="font-medium text-slate-700">Следующий: </span>
-            {autoReplyEnabled
+            {autoReplyEnabled && !serverCronBlocksClient
               ? autoReplyState.posting
                 ? 'отправка…'
                 : autoReplyState.running
@@ -1275,11 +1320,13 @@ export default function FeedbacksPanel({ token }) {
                     : formatMinutes(autoReplyState.nextInMs) > 0
                       ? `через ${formatMinutes(autoReplyState.nextInMs)} мин`
                       : 'скоро'
-              : '—'}
+              : serverCronBlocksClient
+                ? 'сервер · ~6 мин'
+                : '—'}
           </p>
         </div>
 
-        {autoReplyEnabled ? (
+        {autoReplyEnabled && !serverCronBlocksClient ? (
           <div className="mt-2 space-y-2">
             {!aiConfig.serverCronEnabled && !aiConfig.loading ? (
               <div

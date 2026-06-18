@@ -21,7 +21,7 @@ export function getAiConfigStatus() {
       'Серверный cron: каждые 6 мин. CRON_SECRET не задан — /api/cron/auto-reply открыт (рекомендуется секрет)';
   } else if (serverCronEnabled) {
     serverCronHint =
-      'Серверный cron: каждые 6 мин (CRON_SECRET + WB_API_TOKEN). После смены env — Redeploy production.';
+      'Серверный cron: каждые 6 мин (CRON_SECRET + WB_API_TOKEN). Держите переключатель «Вкл» выключенным — иначе двойные запросы к WB и 429.';
   }
 
   return {

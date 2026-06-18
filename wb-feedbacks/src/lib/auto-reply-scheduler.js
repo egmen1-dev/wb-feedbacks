@@ -10,7 +10,12 @@ export { AUTO_REPLY_INTERVAL_MS, AUTO_REPLY_MAX_PER_HOUR, isDraftSafeForAutoSend
 const HOUR_MS = 3_600_000;
 const LOG_MAX = 50;
 const POST_REFRESH_DELAY_MS = 15_000;
-const ERROR_RETRY_MS = 30_000;
+/** Non-rate errors: wait at least one slot interval before retry (avoid hammering WB). */
+const ERROR_RETRY_MS = AUTO_REPLY_INTERVAL_MS;
+/** 429 / Retry-After floor — server cron may run in parallel if client toggle left on. */
+const MIN_RATE_LIMIT_BACKOFF_MS = 60_000;
+/** After skipping unsafe draft, don't immediately pick next review. */
+const SKIP_RETRY_MS = 30_000;
 const MIN_SCHEDULE_MS = 3_000;
 
 const STORAGE_ENABLED = 'wb-feedbacks:auto-reply:enabled';
@@ -202,6 +207,12 @@ async function fetchUnanswered(token, take = 20) {
  *   onFeedbacksLoaded?: (data: { feedbacks: Array, countUnanswered: number, hasMore: boolean }) => void,
  * }} options
  */
+function resolveBackoffMs({ retryAfterSec = 0, isRate = false } = {}) {
+  const fromHeader = Number(retryAfterSec) > 0 ? Number(retryAfterSec) * 1000 : 0;
+  if (isRate) return Math.max(fromHeader, MIN_RATE_LIMIT_BACKOFF_MS);
+  return Math.max(fromHeader, ERROR_RETRY_MS);
+}
+
 export function createAutoReplyScheduler({
   token,
   getFeedbacks,
@@ -209,6 +220,8 @@ export function createAutoReplyScheduler({
   onState,
   onAfterSend,
   onFeedbacksLoaded,
+  /** When true, scheduler stays idle — server Vercel cron handles auto-reply. */
+  isServerCronActive = () => false,
 }) {
   let enabled = false;
   let running = false;
@@ -307,6 +320,15 @@ export function createAutoReplyScheduler({
 
   async function runCycle({ immediate = false } = {}) {
     if (!enabled || stopped) return;
+
+    if (isServerCronActive()) {
+      emit({
+        status: 'серверный cron активен — клиентский отключён',
+        phase: 'idle',
+      });
+      clearTimer();
+      return;
+    }
 
     if (running) {
       scheduleNext();
@@ -409,9 +431,10 @@ export function createAutoReplyScheduler({
           lastResult: { at: new Date().toISOString(), feedbackId: feedback.id, ok: false, reason: draftResult.error },
         });
         const retryAfterSec = Number(draftResult.payload?.retryAfterSec) || 0;
+        const backoff = resolveBackoffMs({ retryAfterSec, isRate });
         scheduleNext(
-          isRate && retryAfterSec > 0 ? retryAfterSec * 1000 : ERROR_RETRY_MS,
-          isRate ? `в очереди · ${retryAfterSec || Math.ceil(ERROR_RETRY_MS / 1000)} сек` : undefined
+          backoff,
+          isRate ? `в очереди · ${Math.ceil(backoff / 1000)} сек` : undefined
         );
         return;
       }
@@ -436,7 +459,7 @@ export function createAutoReplyScheduler({
           phase: 'idle',
           lastResult: { at: new Date().toISOString(), feedbackId: feedback.id, ok: false, reason },
         });
-        scheduleNext(MIN_SCHEDULE_MS);
+        scheduleNext(SKIP_RETRY_MS);
         return;
       }
 
@@ -510,7 +533,7 @@ export function createAutoReplyScheduler({
         Number(err.payload?.retryAfterSec) ||
         (isRateLimitError(err) ? Number(err.retryAfterSec) : 0) ||
         0;
-      const backoff = retryAfterSec > 0 ? retryAfterSec * 1000 : isRate ? ERROR_RETRY_MS : ERROR_RETRY_MS;
+      const backoff = resolveBackoffMs({ retryAfterSec, isRate });
       scheduleNext(backoff, isRate ? `в очереди · ${Math.ceil(backoff / 1000)} сек` : undefined);
     } finally {
       running = false;
@@ -525,6 +548,13 @@ export function createAutoReplyScheduler({
       saveAutoReplyEnabled(true);
       skippedIds.clear();
       log('started');
+      if (isServerCronActive()) {
+        emit({
+          status: 'серверный cron активен — клиентский отключён',
+          phase: 'idle',
+        });
+        return;
+      }
       emit({ status: 'запущен', phase: 'idle' });
       runCycle({ immediate: true }).catch((err) => logWarn('start cycle error', err));
     },

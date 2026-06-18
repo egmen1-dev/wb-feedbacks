@@ -8,6 +8,12 @@ import { isDraftSafeForAutoSend } from '../../lib/feedback-auto-reply.js';
 import { readBearerToken, readCronSecret, isVercelCronRequest } from '../../lib/cron-auth.js';
 
 const TAKE = 20;
+/** Extra pause between batch steps (on top of wb-feedbacks throttle). */
+const BATCH_STEP_DELAY_MS = 2500;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function readToken(req) {
   const cronSecret = readCronSecret();
@@ -76,12 +82,15 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, action: 'idle', message: 'Нет неотвеченных отзывов' });
     }
 
+    await sleep(BATCH_STEP_DELAY_MS);
+
     let draftResult = await callDraftHandler(feedback, token, { regenerate: false });
     let check = isDraftSafeForAutoSend(draftResult.data);
     let retried = false;
 
     if (draftResult.status !== 200 || !check.ok) {
       retried = true;
+      await sleep(BATCH_STEP_DELAY_MS);
       draftResult = await callDraftHandler(feedback, token, { regenerate: true });
       check = isDraftSafeForAutoSend(draftResult.data);
     }
@@ -107,6 +116,7 @@ export default async function handler(req, res) {
     }
 
     const text = String(draftResult.data.draft || '').trim();
+    await sleep(BATCH_STEP_DELAY_MS);
     const answer = await postFeedbackAnswer(token, feedback.id, text, { skipVerify: true });
 
     return res.status(200).json({
