@@ -6,15 +6,21 @@ function envPresent(name) {
 }
 
 export function getAiConfigStatus() {
+  const serverCronEnabled = envPresent('WB_API_TOKEN');
   return {
     yandexConfigured: Boolean(readYandexConfig()),
     openaiConfigured: envPresent('OPENAI_API_KEY'),
+    serverCronEnabled,
+    serverCronHint: serverCronEnabled
+      ? 'Серверный cron: каждые 6 мин (без открытой вкладки)'
+      : 'Серверный cron выключен — задайте WB_API_TOKEN в Vercel',
     envPresent: {
       YANDEX_GPT_API_KEY: envPresent('YANDEX_GPT_API_KEY'),
       YANDEX_CLOUD_API_KEY: envPresent('YANDEX_CLOUD_API_KEY'),
       YANDEX_FOLDER_ID: envPresent('YANDEX_FOLDER_ID'),
       YANDEX_GPT_MODEL: envPresent('YANDEX_GPT_MODEL'),
       OPENAI_API_KEY: envPresent('OPENAI_API_KEY'),
+      WB_API_TOKEN: serverCronEnabled,
     },
     ...getDeployMeta(),
   };

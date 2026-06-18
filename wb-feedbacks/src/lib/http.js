@@ -1,6 +1,6 @@
 export const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
-/** YandexGPT draft generation on Vercel often needs 60–90s. */
-export const DRAFT_FETCH_TIMEOUT_MS = 95_000;
+/** Vercel serverless maxDuration is 60s — stay below to surface a clear client error. */
+export const DRAFT_FETCH_TIMEOUT_MS = 58_000;
 
 export async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();

@@ -317,6 +317,8 @@ async function fetchAiConfigStatus() {
         return {
           yandexConfigured: Boolean(payload?.yandexConfigured),
           openaiConfigured: Boolean(payload?.openaiConfigured),
+          serverCronEnabled: Boolean(payload?.serverCronEnabled),
+          serverCronHint: payload?.serverCronHint || '',
           envPresent: payload?.envPresent || null,
           promptVersion: payload?.promptVersion || null,
           commitSha: payload?.commitSha || null,
@@ -501,6 +503,8 @@ export default function FeedbacksPanel({ token }) {
   const [aiConfig, setAiConfig] = useState({
     yandexConfigured: false,
     openaiConfigured: false,
+    serverCronEnabled: false,
+    serverCronHint: '',
     envPresent: null,
     promptVersion: null,
     commitSha: null,
@@ -1018,6 +1022,7 @@ export default function FeedbacksPanel({ token }) {
     const scheduler = createAutoReplyScheduler({
       token,
       getFeedbacks: () => dataRef.current?.feedbacks || [],
+      getCountUnanswered: () => dataRef.current?.countUnanswered ?? 0,
       onState: (state) => setAutoReplyState((prev) => ({ ...prev, ...state })),
       onFeedbacksLoaded: (list) => applyFeedbacksList(list),
       onAfterSend: (feedbackId) => {
@@ -1273,7 +1278,32 @@ export default function FeedbacksPanel({ token }) {
         </div>
 
         {autoReplyEnabled ? (
-          <div className="mt-2 space-y-1">
+          <div className="mt-2 space-y-2">
+            {!aiConfig.serverCronEnabled && !aiConfig.loading ? (
+              <div
+                className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+                role="status"
+              >
+                <p className="font-medium">Серверный автоответчик выключен</p>
+                <p className="mt-1">
+                  {aiConfig.serverCronHint ||
+                    'WB_API_TOKEN не задан в Vercel — ответы уходят только пока эта вкладка открыта и переключатель «Вкл».'}
+                </p>
+              </div>
+            ) : null}
+            {autoReplyState.phase === 'error' || autoReplyState.lastResult?.ok === false ? (
+              <div
+                className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"
+                role="alert"
+              >
+                <p className="font-semibold">Автоответ не отправлен</p>
+                <p className="mt-1">
+                  {autoReplyState.lastResult?.reason ||
+                    autoReplyState.status ||
+                    'Неизвестная ошибка — смотрите журнал ниже'}
+                </p>
+              </div>
+            ) : null}
             <p
               className={`text-xs font-medium ${
                 autoReplyState.phase === 'error'
@@ -1307,7 +1337,11 @@ export default function FeedbacksPanel({ token }) {
 
         {!autoReplyEnabled ? (
           <p className="mt-2 text-xs text-slate-500">
-            Включите переключатель — нужен токен WB и YandexGPT на сервере. Вкладку держите открытой.
+            Включите переключатель — нужен токен WB (категория «Вопросы и отзывы») и YandexGPT на сервере.
+            Вкладку держите открытой и активной (в фоне браузер замедляет таймеры).
+            {!aiConfig.serverCronEnabled && !aiConfig.loading
+              ? ' Для работы без вкладки задайте WB_API_TOKEN в Vercel.'
+              : ''}
           </p>
         ) : null}
 

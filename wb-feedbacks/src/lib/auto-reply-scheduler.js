@@ -205,6 +205,7 @@ async function fetchUnanswered(token, take = 20) {
 export function createAutoReplyScheduler({
   token,
   getFeedbacks,
+  getCountUnanswered,
   onState,
   onAfterSend,
   onFeedbacksLoaded,
@@ -221,6 +222,13 @@ export function createAutoReplyScheduler({
   function formatDraftError(err) {
     const parts = [err?.message, err?.payload?.hint, err?.payload?.error].filter(Boolean);
     return parts.length ? parts.join(' — ') : 'Ошибка генерации';
+  }
+
+  function formatPostError(err) {
+    const parts = [err?.message, err?.payload?.hint, err?.payload?.error, err?.payload?.detail].filter(
+      Boolean
+    );
+    return parts.length ? parts.join(' — ') : 'Ошибка отправки в WB';
   }
 
   function emit(patch = {}) {
@@ -335,6 +343,15 @@ export function createAutoReplyScheduler({
       }
 
       let feedback = pickNextFeedback(feedbacks, skippedIds);
+      const expectedCount = getCountUnanswered?.() ?? 0;
+
+      if (!feedback && skippedIds.size === 0 && (expectedCount > 0 || feedbacks.length > 0)) {
+        log('no pickable review in cache — refetching', { expectedCount, cached: feedbacks.length });
+        const fetched = await loadFeedbacksList();
+        if (fetched === null) return;
+        feedbacks = fetched;
+        feedback = pickNextFeedback(feedbacks, skippedIds);
+      }
 
       if (!feedback && skippedIds.size > 0) {
         log('all cached reviews skipped — refetching');
@@ -346,7 +363,22 @@ export function createAutoReplyScheduler({
       }
 
       if (!feedback) {
-        emit({ status: 'нет отзывов', phase: 'idle' });
+        const status =
+          expectedCount > 0
+            ? `нет отзывов в кэше · WB сообщает ${expectedCount} без ответа — обновите список`
+            : 'нет отзывов';
+        emit({
+          status,
+          phase: 'idle',
+          lastResult: expectedCount > 0
+            ? {
+                at: new Date().toISOString(),
+                feedbackId: null,
+                ok: false,
+                reason: status,
+              }
+            : undefined,
+        });
         scheduleNext(AUTO_REPLY_INTERVAL_MS);
         return;
       }
@@ -451,7 +483,7 @@ export function createAutoReplyScheduler({
       scheduleNext(AUTO_REPLY_INTERVAL_MS);
     } catch (err) {
       posting = false;
-      const reason = [err.message, err.payload?.hint].filter(Boolean).join(' — ') || 'Ошибка';
+      const reason = formatPostError(err);
       const isRate = isRateLimitError(err);
       const fb = currentFeedback;
       appendLog({
